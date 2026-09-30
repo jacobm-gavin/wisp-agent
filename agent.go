@@ -32,10 +32,14 @@ type Event struct {
 // Emit returns after the event and its run have been durably accepted. An error
 // means acceptance failed. Repeated calls are distinct events, even with equal
 // payloads; Wisp does not promise exactly-once external delivery.
+// It is safe to call concurrently, but Data must not be mutated until Emit
+// returns. Calls may block for capacity; source code must handle their errors.
 type Emit func(context.Context, Event) (string, error)
 
 // EventSource emits one declared kind of event. Run must honor cancellation and
 // stop its background work before returning. Returning nil ends only this source.
+// Its context and Emit callback expire when Run returns. Already accepted runs
+// belong to the runtime lifetime and continue independently of the source.
 type EventSource interface {
 	Definition() EventDefinition
 	Run(context.Context, Emit) error
@@ -90,6 +94,15 @@ type Response struct {
 // Config contains runtime mechanics, separate from the capability declaration.
 type Config struct {
 	Models map[string]Model
+	// MaxConcurrentRuns defaults to 16. Emit waits for capacity before durable
+	// acceptance; cancellation while waiting accepts nothing. Negative is invalid.
+	MaxConcurrentRuns int
+	// MaxModelTurns defaults to 64. Exceeding it fails the run without another
+	// model request. Negative is invalid; this is a bound, not a retry policy.
+	MaxModelTurns int
+	// RunTimeout optionally bounds each accepted run. Zero uses only the runtime
+	// lifetime; implementations must cooperate with context cancellation.
+	RunTimeout time.Duration
 	// Instructions supplies the declared Markdown files. Files are snapshotted in
 	// declaration order at startup; changing them requires a new runtime.
 	Instructions fs.FS

@@ -66,6 +66,9 @@ func TestErrorsAndCompletion(t *testing.T) {
 		{"bad JSON", `{`, "decode", 200},
 		{"empty", `{"choices":[]}`, "one response", 200},
 		{"truncated", `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"partial"}}]}`, "incomplete", 200},
+		{"finish reason redaction", `{"choices":[{"finish_reason":"test-key","message":{"role":"assistant"}}]}`, "[redacted]", 200},
+		{"scalar arguments", `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"x","type":"function","function":{"name":"fixture","arguments":"42"}}]}}]}`, "malformed", 200},
+		{"duplicate calls", `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"x","type":"function","function":{"name":"fixture","arguments":"{}"}},{"id":"x","type":"function","function":{"name":"fixture","arguments":"{}"}}]}}]}`, "malformed", 200},
 		{"missing calls", `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null}}]}`, "without calls", 200},
 		{"bad args", `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"x","type":"function","function":{"name":"fixture","arguments":"bad"}}]}}]}`, "malformed", 200},
 	} {

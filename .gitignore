@@ -1,4 +1,6 @@
 *.db
 *.db-shm
 *.db-wal
+*.db.lock
 coverage.out
+wisp-minimal

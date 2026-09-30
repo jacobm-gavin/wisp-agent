@@ -2,10 +2,62 @@ package wisp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestUnknownDatabaseIsNotModified(t *testing.T) {
+	for _, version := range []string{"0", "99"} {
+		t.Run(version, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "unrelated.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = db.Exec(`CREATE TABLE precious(value TEXT); INSERT INTO precious VALUES('keep'); PRAGMA user_version=` + version); err != nil {
+				t.Fatal(err)
+			}
+			db.Close()
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s, err := openStore(path); err == nil {
+				s.close()
+				t.Fatal("unsupported database accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("rejected database was modified")
+			}
+		})
+	}
+}
+
+func TestOwnershipResolvesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "history.db")
+	s, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.close()
+	alias := filepath.Join(dir, "alias.db")
+	if err := os.Symlink(path, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if other, err := openStore(alias); err == nil {
+		other.close()
+		t.Fatal("symlink bypassed ownership")
+	}
+}
 
 func TestAcceptanceIsAtomic(t *testing.T) {
 	r := newRuntime(t, declaration(), modelFunc(func(context.Context, Request) (Response, error) { return Response{}, nil }), ":memory:")

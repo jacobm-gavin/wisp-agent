@@ -19,7 +19,7 @@ func (r *Runtime) execute(ctx context.Context, id, source string, event Event) (
 	}
 	messages := append(cloneMessages(r.instructions), Message{Role: "user", Content: string(facts)})
 	seen := make(map[string]bool)
-	for turn := 1; ; turn++ {
+	for turn := 1; turn <= r.maxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
@@ -70,6 +70,7 @@ func (r *Runtime) execute(ctx context.Context, id, source string, event Event) (
 		messages = append(messages, Message{Role: "assistant", Content: response.Text, ToolCalls: response.ToolCalls})
 		messages = append(messages, results...)
 	}
+	return "", fmt.Errorf("model turn limit exceeded (%d)", r.maxTurns)
 }
 
 // recordSettled persists results even after cancellation, with a bounded write.

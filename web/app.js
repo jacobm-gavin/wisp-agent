@@ -17,7 +17,10 @@ async function refresh() {
   if (refreshing) { pending = true; return; }
   refreshing = true;
   try {
-    const runs = await get("/api/runs");
+    const [active, recent] = await Promise.all([get("/api/active-runs"), get("/api/runs")]);
+    // Recent records win if a run completed between the two snapshots.
+    const runs = [...new Map([...active, ...recent].map(run => [run.id, run])).values()];
+    runs.sort((a, b) => Number(b.status === "running") - Number(a.status === "running") || new Date(b.started_at) - new Date(a.started_at));
     const list = byId("runs");
     list.replaceChildren();
     if (!runs.length) list.textContent = "No runs yet.";

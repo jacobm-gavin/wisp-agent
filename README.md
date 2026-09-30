@@ -1,7 +1,21 @@
 # Wisp Agent
 
-A small Go runtime for persistent agents, defined by the **events they receive**
-and the **tools they can invoke**.
+**Wisp is a Go agent framework and runtime library. Developers import Wisp to
+build their own persistent agent applications.**
+
+Wisp supplies the execution machinery: model calls, fresh run contexts, tool
+execution, concurrency, SQLite history, and inspection. You define the agent:
+
+- Construct an `Agent` declaring its model, Markdown instructions, event sources,
+  and tools.
+- Implement or import `EventSource`s that detect something and emit `Event`
+  values containing facts.
+- Implement or import `Tool`s exposing individual capabilities the model can
+  invoke.
+
+An `Agent` is a declaration, an `Event` is data, and `EventSource` and `Tool` are
+Go interfaces. Integrations are ordinary Go code. Every capability must be
+explicitly declared; importing a package does not grant it to the agent.
 
 Each event starts a fresh run. The model requests tools, receives their results,
 and continues until it returns no tool calls. Runs can overlap; tool calls from
@@ -16,24 +30,34 @@ read-only activity UI with SSE updates. Models, tools, and event sources are Go
 interfaces. An OpenRouter model adapter is included; real tool and event
 integrations are not bundled.
 
-This repository is a **library**, not a standalone agent application. There is
-currently no CLI or `main.go`, so `go run .` will not start an agent. The agent
-declarations in [example_test.go](example_test.go) and the
-[live integration test](model/openrouter/live_test.go) are test fixtures.
+This repository develops the framework. The root package is a **library**, and
+your agent is an application built with it. A runnable example host lives in
+[examples/minimal](examples/minimal), with its declaration in
+[agent.go](examples/minimal/agent.go). Its Events and Tools lists are deliberately
+empty: it starts the runtime and inspection UI but has no way to wake or act.
 
-## Run the example
+## Run the minimal agent
 
 Install Go 1.24 or later, then:
 
 ```sh
 git clone https://github.com/jacobm-gavin/wisp-agent.git
 cd wisp-agent
-go test -v -count=1 -run '^ExampleRuntime$' .
+# OPENROUTER_API_KEY must be exported in your shell.
+go run ./examples/minimal
 ```
 
-This runs the complete event → model → tool → model loop with synthetic
-capabilities and an in-memory database, then exits. It requires no credentials,
-makes no network inference requests, and does not start a web server.
+Open <http://127.0.0.1:8080>. The host creates `wisp.db` in the working directory
+and remains dormant; startup makes no model requests. Stop it with Ctrl+C.
+Use `-db /path/to/history.db`, `-listen 127.0.0.1:9090`, or `-model MODEL_ID`
+to configure the host. Only loopback inspection addresses are accepted.
+
+To exercise the full loop without credentials or network requests, run the
+synthetic test example instead:
+
+```sh
+go test -v -count=1 -run '^ExampleRuntime$' .
+```
 
 ## Usage
 
@@ -77,38 +101,33 @@ configuration stays outside the agent declaration. Markdown instructions are
 loaded in order when the runtime is constructed.
 
 Mount `runtime.Handler()` on a local HTTP server for the activity UI. It exposes
-`GET /api/agent`, `/api/runs`, `/api/runs/{id}`, and `/api/stream`. The handler is
+`GET /api/agent`, `/api/runs`, `/api/active-runs`, `/api/runs/{id}`, and `/api/stream`. The handler is
 read-only; a user-message endpoint or reply transport must be supplied as an
 explicit event source or tool. `ListRuns` and `History` also expose inspection in Go.
 
 ## Running and deployment
 
-Once your application has `main.go`, its agent declaration, and the declared
-instruction files, run these commands **from that application directory**:
+Build the included host from the repository root:
 
 ```sh
-go run .
-# Or build a standalone executable for the current platform:
-CGO_ENABLED=0 go build -o my-agent .
-./my-agent
+CGO_ENABLED=0 go build -o wisp-minimal ./examples/minimal
+./wisp-minimal -db /absolute/path/to/history.db
 ```
 
-Application startup should create a context canceled by `SIGINT`/`SIGTERM`, call
-`wisp.New`, and pass that context to `runtime.Run`. For inspection, serve
-`runtime.Handler()` with `net/http` on `127.0.0.1:8080`, then open
-<http://127.0.0.1:8080>. The runtime does not start an HTTP listener itself.
+Deploy that executable to the same OS/architecture, export `OPENROUTER_API_KEY`,
+and choose an existing writable directory for persistent history. Instructions
+and UI assets are embedded; the target needs neither Go nor a database server.
+A service manager can run the same command and environment. SIGINT/SIGTERM stop
+intake, cancel work, close the HTTP server, and release the database.
 
-Deploy the resulting executable and instruction files together, keeping the
-working directory consistent with `os.DirFS(".")`. Configure `DatabasePath` to
-use a writable, persistent location; one runtime must exclusively own that file.
-The UI assets are embedded in the binary. A Go installation and external database
-server are not needed on the target machine.
+SQLite history belongs to one runtime. A companion `.lock` file enforces this
+across processes and is released automatically on exit or crash. Leave that file
+in place; use local storage and do not give the same database multiple hard-link
+names. Inspection has no authentication and stays on localhost.
 
-Supply provider credentials through the application's environment. On shutdown,
-cancel the runtime context, stop the HTTP server, wait for `runtime.Run` to return,
-then call `runtime.Close`. A service manager can run the executable with that
-working directory, environment, and persistent storage. The inspection UI has no
-authentication and should remain bound to localhost.
+For your own application, use the minimal host's startup/shutdown code as a
+reference. If you use `os.DirFS(".")` instead of embedded instructions, deploy
+the Markdown files too and set the working directory accordingly.
 
 ## Runtime contract
 
@@ -121,12 +140,15 @@ authentication and should remain bound to localhost.
 - Final text is saved for inspection. External communication requires a tool.
 - Cancellation stops intake and joins sources and runs. Implementations must honor
   `context.Context`; tools own argument validation and resource-specific locking.
+- By default, up to 16 runs execute concurrently and each run can make 64 model
+  calls. `Emit` waits for capacity before acceptance; canceled waits create nothing.
+  Configure `MaxConcurrentRuns`, `MaxModelTurns`, and optional `RunTimeout` in
+  `wisp.Config`. The included host sets a five-minute run timeout.
 - One runtime owns each SQLite file. Restart marks unfinished runs failed and
   never replays them. Instructions and capabilities are fixed until restart.
 
 The core provides concurrency, with no generic workspace isolation, retries,
-automatic memory, or workflow machinery. Run deadlines and admission limits are
-not yet configurable. Inspection exposes raw event/model/tool data.
+automatic memory, or workflow machinery. Inspection exposes raw event/model/tool data.
 
 ## Development
 
@@ -134,6 +156,7 @@ not yet configurable. Inspection exposes raw event/model/tool data.
 go test -race ./...
 go vet ./...
 CGO_ENABLED=0 go build ./...
+go test -run '^$' -fuzz FuzzResponseProtocol -fuzztime=10s ./model/openrouter
 ```
 
 Tests use deterministic models and synthetic capabilities; no credentials or

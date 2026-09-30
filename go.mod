@@ -2,7 +2,10 @@ module github.com/jacobm-gavin/wisp-agent
 
 go 1.24.0
 
-require modernc.org/sqlite v1.36.3
+require (
+	github.com/gofrs/flock v0.12.1
+	modernc.org/sqlite v1.36.3
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

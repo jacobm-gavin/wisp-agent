@@ -27,7 +27,8 @@ func TestInspectionHTTPAndSSE(t *testing.T) {
 		path, contains string
 		code           int
 	}{
-		{"/", "Recent runs", 200}, {"/app.js", "textContent", 200}, {"/style.css", "@media", 200},
+		{"/", "Active and recent runs", 200}, {"/app.js", "textContent", 200}, {"/style.css", "@media", 200},
+		{"/api/active-runs", "[]", 200},
 		{"/api/agent", `"name":"Test"`, 200}, {"/api/runs", "[]", 200}, {"/api/runs/missing", "404", 404}, {"/missing", "404", 404},
 	} {
 		resp, err := client.Get(server.URL + tc.path)

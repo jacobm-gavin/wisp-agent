@@ -18,6 +18,14 @@ var assets embed.FS
 func (r *Runtime) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/agent", func(w http.ResponseWriter, req *http.Request) { writeJSON(w, r.Describe()) })
+	mux.HandleFunc("GET /api/active-runs", func(w http.ResponseWriter, req *http.Request) {
+		runs, err := r.ActiveRuns(req.Context())
+		if err != nil {
+			http.Error(w, "history unavailable", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, runs)
+	})
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, req *http.Request) {
 		runs, err := r.ListRuns(req.Context(), 100)
 		if err != nil {

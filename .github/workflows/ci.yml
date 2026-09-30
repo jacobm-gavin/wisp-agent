@@ -6,7 +6,10 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -19,3 +22,8 @@ jobs:
       - run: go test -race ./...
       - name: Build without CGO
         run: CGO_ENABLED=0 go build ./...
+      - name: Build application
+        run: CGO_ENABLED=0 go build -o /tmp/wisp-minimal ./examples/minimal
+      - name: Fuzz provider response decoding
+        if: runner.os == 'Linux'
+        run: go test -run '^$' -fuzz FuzzResponseProtocol -fuzztime=10s ./model/openrouter

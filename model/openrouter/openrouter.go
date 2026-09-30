@@ -131,6 +131,10 @@ func (m *Model) Generate(ctx context.Context, req wisp.Request) (wisp.Response, 
 	if len(data) > limit {
 		return wisp.Response{}, errors.New("openrouter: response exceeds 8 MiB")
 	}
+	return m.decodeResponse(resp.StatusCode, data)
+}
+
+func (m *Model) decodeResponse(status int, data []byte) (wisp.Response, error) {
 	var result struct {
 		Error *struct {
 			Message  string `json:"message"`
@@ -145,8 +149,8 @@ func (m *Model) Generate(ctx context.Context, req wisp.Request) (wisp.Response, 
 		} `json:"choices"`
 	}
 	decodeErr := json.Unmarshal(data, &result)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || result.Error != nil {
-		detail := http.StatusText(resp.StatusCode)
+	if status < 200 || status >= 300 || result.Error != nil {
+		detail := http.StatusText(status)
 		if result.Error != nil {
 			detail = result.Error.Message
 			if result.Error.Metadata.Provider != "" {
@@ -164,7 +168,7 @@ func (m *Model) Generate(ctx context.Context, req wisp.Request) (wisp.Response, 
 		if len(detail) > 1024 {
 			detail = detail[:1024] + "…"
 		}
-		return wisp.Response{}, fmt.Errorf("openrouter: HTTP %d: %s", resp.StatusCode, detail)
+		return wisp.Response{}, fmt.Errorf("openrouter: HTTP %d: %s", status, detail)
 	}
 	if decodeErr != nil {
 		return wisp.Response{}, fmt.Errorf("openrouter: decode response: %w", decodeErr)
@@ -174,16 +178,23 @@ func (m *Model) Generate(ctx context.Context, req wisp.Request) (wisp.Response, 
 	}
 	choice := result.Choices[0]
 	if choice.FinishReason != "stop" && choice.FinishReason != "tool_calls" {
-		return wisp.Response{}, fmt.Errorf("openrouter: incomplete response (finish_reason=%q)", choice.FinishReason)
+		reason := strings.ReplaceAll(choice.FinishReason, m.key, "[redacted]")
+		if len(reason) > 80 {
+			reason = "invalid"
+		}
+		return wisp.Response{}, fmt.Errorf("openrouter: incomplete response (finish_reason=%q)", reason)
 	}
 	if choice.Message.Role != "assistant" {
 		return wisp.Response{}, errors.New("openrouter: expected an assistant response")
 	}
 	output := wisp.Response{Text: choice.Message.Content}
+	seen := make(map[string]bool)
 	for _, call := range choice.Message.ToolCalls {
-		if call.Type != "function" || call.ID == "" || call.Function.Name == "" || !json.Valid([]byte(call.Function.Arguments)) {
+		var args map[string]json.RawMessage
+		if call.Type != "function" || strings.TrimSpace(call.ID) == "" || seen[call.ID] || strings.TrimSpace(call.Function.Name) == "" || json.Unmarshal([]byte(call.Function.Arguments), &args) != nil || args == nil {
 			return wisp.Response{}, errors.New("openrouter: malformed function call")
 		}
+		seen[call.ID] = true
 		output.ToolCalls = append(output.ToolCalls, wisp.ToolCall{ID: call.ID, Name: call.Function.Name, Arguments: json.RawMessage(call.Function.Arguments)})
 	}
 	if choice.FinishReason == "tool_calls" && len(output.ToolCalls) == 0 {

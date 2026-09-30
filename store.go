@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/gofrs/flock"
 	_ "modernc.org/sqlite" // SQLite driver registration is infrastructure, not a capability.
 )
 
@@ -47,7 +49,8 @@ type History struct {
 }
 
 type store struct {
-	db *sql.DB
+	db    *sql.DB
+	owner *flock.Flock
 	// An in-memory database needs a live connection even when database/sql
 	// replaces an operational connection after a canceled transaction.
 	keeper *sql.Conn
@@ -58,10 +61,22 @@ func (s *store) close() error {
 	if s.keeper != nil {
 		err = s.keeper.Close()
 	}
-	return errors.Join(err, s.db.Close())
+	if s.db != nil {
+		err = errors.Join(err, s.db.Close())
+	}
+	if s.owner != nil {
+		err = errors.Join(err, s.owner.Close())
+	}
+	return err
 }
 
 func openStore(path string) (_ *store, err error) {
+	s := &store{}
+	defer func() {
+		if err != nil {
+			_ = s.close()
+		}
+	}()
 	params := url.Values{"_pragma": {"foreign_keys(1)", "busy_timeout(5000)"}}
 	var uri url.URL
 	if path == ":memory:" {
@@ -73,6 +88,27 @@ func openStore(path string) (_ *store, err error) {
 		if err != nil {
 			return nil, err
 		}
+		directory, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+		if err != nil {
+			return nil, err
+		}
+		absolute = filepath.Join(directory, filepath.Base(absolute))
+		if _, err := os.Lstat(absolute); err == nil {
+			absolute, err = filepath.EvalSymlinks(absolute)
+			if err != nil {
+				return nil, err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		s.owner = flock.New(absolute + ".lock")
+		locked, err := s.owner.TryLock()
+		if err != nil {
+			return nil, err
+		}
+		if !locked {
+			return nil, errors.New("wisp: database is already owned by another runtime")
+		}
 		uri = url.URL{Scheme: "file", Path: absolute, RawQuery: params.Encode()}
 	}
 	db, err := sql.Open("sqlite", uri.String())
@@ -80,20 +116,12 @@ func openStore(path string) (_ *store, err error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	s := &store{db: db}
-	defer func() {
-		if err != nil {
-			_ = s.close()
-		}
-	}()
+	s.db = db
 	if path == ":memory:" {
 		db.SetMaxOpenConns(2)
 		if s.keeper, err = db.Conn(context.Background()); err != nil {
 			return nil, err
 		}
-	}
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
-		return nil, err
 	}
 	var version int
 	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
@@ -102,8 +130,25 @@ func openStore(path string) (_ *store, err error) {
 	if version > 1 {
 		return nil, fmt.Errorf("wisp: unsupported database version %d", version)
 	}
-	if _, err = db.Exec(`
-	BEGIN;
+	if version == 0 {
+		var tables int
+		if err = db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'`).Scan(&tables); err != nil {
+			return nil, err
+		}
+		if tables != 0 {
+			return nil, errors.New("wisp: refusing to initialize a nonempty unversioned database")
+		}
+	}
+	if _, err = db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
+		return nil, err
+	}
+	if version == 0 {
+		setup, err := db.Begin()
+		if err != nil {
+			return nil, err
+		}
+		defer setup.Rollback()
+		if _, err = setup.Exec(`
 	CREATE TABLE IF NOT EXISTS events (
 	 id TEXT PRIMARY KEY, source TEXT NOT NULL, payload BLOB NOT NULL
 	);
@@ -117,9 +162,12 @@ func openStore(path string) (_ *store, err error) {
 	 kind TEXT NOT NULL, time TEXT NOT NULL, data BLOB NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS activity_run ON activity(run_id, sequence);
-	PRAGMA user_version=1;
-	COMMIT;`); err != nil {
-		return nil, err
+	PRAGMA user_version=1;`); err != nil {
+			return nil, err
+		}
+		if err = setup.Commit(); err != nil {
+			return nil, err
+		}
 	}
 	// A restart identifies abandoned work; it never replays external effects.
 	tx, err := db.Begin()
@@ -239,7 +287,17 @@ func (r *Runtime) ListRuns(ctx context.Context, limit int) ([]RunRecord, error) 
 	if limit < 1 || limit > 1000 {
 		return nil, errors.New("wisp: limit must be between 1 and 1000")
 	}
-	rows, err := r.store.db.QueryContext(ctx, runQuery+` ORDER BY r.rowid DESC LIMIT ?`, limit)
+	return r.queryRuns(ctx, runQuery+` ORDER BY r.rowid DESC LIMIT ?`, limit)
+}
+
+// ActiveRuns returns all running records, including runs older than the recent
+// history window. Accepted runs include work between model/tool calls.
+func (r *Runtime) ActiveRuns(ctx context.Context) ([]RunRecord, error) {
+	return r.queryRuns(ctx, runQuery+` WHERE r.status='running' ORDER BY r.rowid DESC`)
+}
+
+func (r *Runtime) queryRuns(ctx context.Context, query string, args ...any) ([]RunRecord, error) {
+	rows, err := r.store.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
