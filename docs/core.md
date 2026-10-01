@@ -1,9 +1,30 @@
 # Core implementation notes
 
 The [architecture specification](../Wisp_Agent_Architecture.md) is authoritative.
-The core implements its runtime with a separate OpenRouter model adapter. Real
-tools and event integrations remain future work. The browser is an inspection surface;
+The core implements its runtime with a separate OpenRouter model adapter.
+[Read/write file tools](../tools/files/README.md) are ordinary integrations outside
+the core; command/reply tools and real event sources remain future work. The browser is an inspection surface;
 there is no implicit chat capability.
+
+## Architecture conformance review
+
+Reviewed against the specification's normative checklist (section 24), design
+tests (25), acceptance criteria (27), and implementation guidance (28) on
+2026-09-30. No core architectural violation was identified in this review; the
+evidence map below covers the executable invariants. This is not acceptance of
+the full prototype: real integrations and user-message submission remain deferred.
+
+The small execution bounds are runtime safety configuration permitted by sections
+10.6 and 22, not an event-priority scheduler. Database ownership protects Wisp's
+history, not resources exposed by Tools. Failed crash recovery records do not
+resume runs or replay effects. An emission is accepted only when `Emit` succeeds;
+invalid/canceled attempts create no run, while every successful emission creates
+one, without semantic filtering or deduplication.
+
+Capability granularity and facts-versus-policy separation also require review of
+integration code: Go interfaces cannot enforce those semantic promises. The core
+is not a sandbox. Follow the [development principles](../CONTRIBUTING.md) for new
+work instead of adding speculative enforcement machinery.
 
 ## Boundaries
 
@@ -103,11 +124,16 @@ Starting the application configures OpenRouter but makes no inference request.
 | Unrecognized databases are left unchanged | `TestUnknownDatabaseIsNotModified` |
 | Application shutdown joins active SSE connections and handles listener failures | `TestServeCancelsOpenStreamsAndReleasesRuntime`, `TestServerFailureStopsRuntime` |
 | Provider response parsing rejects malformed calls | `FuzzResponseProtocol`, `TestErrorsAndCompletion` |
+| Live concurrent runs/tools, explicit replies, failures, cancellation, HTTP/SSE, and disk reopen | `TestOpenRouterLiveCoreE2E` |
 
-The full prototype's real file/command/reply tools and user/timer integrations
-remain outside this milestone. `TestOpenRouterLive` is an opt-in network check for
+The full prototype's integrations remain outside the core milestone. Read/write
+tools now live in `tools/files`; command/reply tools and user/timer integrations
+remain future work. `TestOpenRouterLive` is an opt-in network check for
 `qwen/qwen3.8-27b`; it verifies text completion and an entire persisted run
-using two synthetic tool results. Offline adapter tests verify wire encoding,
+using two synthetic tool results. `TestOpenRouterLiveCoreE2E` exercises six events
+with real model calls, synthetic capabilities, a file-backed database, and a real
+local HTTP server. See the [core v0.1 acceptance record](core-v0.1-acceptance.md).
+Offline adapter tests verify wire encoding,
 multiple calls, cancellation, errors, redaction, redirects, and truncation.
 Resource isolation, multi-agent orchestration, planners,
 plugins, automatic memory, and workflow engines remain non-goals.

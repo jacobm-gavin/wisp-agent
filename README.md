@@ -1,67 +1,56 @@
 # Wisp Agent
 
-**Wisp is a Go agent framework and runtime library. Developers import Wisp to
-build their own persistent agent applications.**
+**Wisp is a small Go framework and runtime for building your own persistent
+agents—not a preconfigured coding agent.**
 
-Wisp supplies the execution machinery: model calls, fresh run contexts, tool
-execution, concurrency, SQLite history, and inspection. You define the agent:
+You declare what can wake your agent (**event sources**), what it can do
+(**tools**), which model it uses, and which Markdown instructions govern it.
+Wisp handles execution, concurrency, SQLite history, and inspection.
 
-- Construct an `Agent` declaring its model, Markdown instructions, event sources,
-  and tools.
-- Implement or import `EventSource`s that detect something and emit `Event`
-  values containing facts.
-- Implement or import `Tool`s exposing individual capabilities the model can
-  invoke.
+The philosophy is simple: **small core, explicit capabilities, ordinary Go.**
+Importing a package never grants a capability. Each event starts a fresh run;
+previous history is not automatic memory. Tools are the only intentional way to
+affect the world—including replying to a person. Final model text is saved, not
+automatically sent.
 
-An `Agent` is a declaration, an `Event` is data, and `EventSource` and `Tool` are
-Go interfaces. Integrations are ordinary Go code. Every capability must be
-explicitly declared; importing a package does not grant it to the agent.
+## Quickstart
 
-Each event starts a fresh run. The model requests tools, receives their results,
-and continues until it returns no tool calls. Runs can overlap; tool calls from
-one model turn execute concurrently. SQLite records what happened without turning
-that history into automatic memory.
+You need **Go 1.24 or later**.
 
-## Status
-
-Early core implementation; the API may change. Includes declaration validation,
-instruction loading, run execution, cancellation, SQLite history, and an embedded
-read-only activity UI with SSE updates. Models, tools, and event sources are Go
-interfaces. An OpenRouter model adapter is included; real tool and event
-integrations are not bundled.
-
-This repository develops the framework. The root package is a **library**, and
-your agent is an application built with it. A runnable example host lives in
-[examples/minimal](examples/minimal), with its declaration in
-[agent.go](examples/minimal/agent.go). Its Events and Tools lists are deliberately
-empty: it starts the runtime and inspection UI but has no way to wake or act.
-
-## Run the minimal agent
-
-Install Go 1.24 or later, then:
+### Try the execution loop without an API key
 
 ```sh
 git clone https://github.com/jacobm-gavin/wisp-agent.git
 cd wisp-agent
-# OPENROUTER_API_KEY must be exported in your shell.
-go run ./examples/minimal
-```
-
-Open <http://127.0.0.1:8080>. The host creates `wisp.db` in the working directory
-and remains dormant; startup makes no model requests. Stop it with Ctrl+C.
-Use `-db /path/to/history.db`, `-listen 127.0.0.1:9090`, or `-model MODEL_ID`
-to configure the host. Only loopback inspection addresses are accepted.
-
-To exercise the full loop without credentials or network requests, run the
-synthetic test example instead:
-
-```sh
 go test -v -count=1 -run '^ExampleRuntime$' .
 ```
 
-## Usage
+This runs a complete event → model → tool → completion cycle using deterministic
+test doubles. No network calls or external actions occur. The example verifies
+that the run completes and saves its output.
 
-To build your own agent, create a separate Go application and add Wisp:
+### Open the inspection UI
+
+Export your OpenRouter key in your shell, then run:
+
+```sh
+go run ./examples/minimal
+```
+
+Open <http://127.0.0.1:8080>. Stop with Ctrl+C.
+
+The host creates `wisp.db` in the current directory. Its
+[agent declaration](examples/minimal/agent.go) intentionally has **no event
+sources or tools**, so it stays dormant and makes no model requests. This is an
+inspection host, not a chat interface. Add explicit capabilities to make an agent
+act.
+
+The host accepts `-db PATH`, `-listen 127.0.0.1:PORT`, and `-model MODEL_ID`.
+Its default model is the paid `qwen/qwen3.8-27b`.
+
+### Start your own application
+
+In a separate directory:
 
 ```sh
 mkdir my-agent
@@ -70,87 +59,172 @@ go mod init example.com/my-agent
 go get github.com/jacobm-gavin/wisp-agent@latest
 ```
 
-Import `github.com/jacobm-gavin/wisp-agent` as `wisp`. Define your application
-agent in `agent.go` and its startup code in `main.go`. Supply your event sources
-and tools, plus a model implementation or the OpenRouter adapter below:
+The next two sections provide complete capability files. The
+[application wiring](#assemble-your-agent) below combines them into a runnable
+program. The API is pre-stable; pin a tested version or commit for deployments.
+
+## Make a tool
+
+A tool implements two methods:
+
+- `Definition()`: its name, description, and JSON argument schema.
+- `Execute(ctx, args)`: validate arguments, perform one capability, and return
+  a JSON result or error.
+
+For example, save this as `clock.go` in your application:
 
 ```go
-agent := wisp.Agent{
-    Name:         "Assistant",
-    Model:        "local",
-    Instructions: []string{"instructions/base.md"},
-    Events:       []wisp.EventSource{messageSource},
-    Tools:        []wisp.Tool{readFile, respond},
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "time"
+
+    wisp "github.com/jacobm-gavin/wisp-agent"
+)
+
+type CurrentTime struct{}
+
+func (CurrentTime) Definition() wisp.ToolDefinition {
+    return wisp.ToolDefinition{
+        Name:        "current_time",
+        Description: "Read the current time in UTC.",
+        Parameters: json.RawMessage(
+            `{"type":"object","properties":{},"additionalProperties":false}`,
+        ),
+    }
 }
 
-runtime, err := wisp.New(agent, wisp.Config{
-    Models:       map[string]wisp.Model{"local": model},
-    Instructions: os.DirFS("."),
-    DatabasePath: "wisp.db",
-})
+func (CurrentTime) Execute(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
+    if err := ctx.Err(); err != nil {
+        return nil, err
+    }
+    var args map[string]json.RawMessage
+    if err := json.Unmarshal(raw, &args); err != nil {
+        return nil, err
+    }
+    if args == nil || len(args) != 0 {
+        return nil, fmt.Errorf("current_time expects an empty JSON object")
+    }
+    return json.Marshal(map[string]string{
+        "utc": time.Now().UTC().Format(time.RFC3339Nano),
+    })
+}
+```
+
+It is callable only when you explicitly put `CurrentTime{}` in `Agent.Tools`.
+
+Tool authors must validate arguments; the runtime does not enforce every JSON
+Schema constraint. Honor cancellation and make implementations safe for
+concurrent calls. Keep resource-specific locking inside the tool. An execution
+error fails its run; Wisp does not automatically retry effects.
+
+### Use the included file tools
+
+Import `github.com/jacobm-gavin/wisp-agent/tools/files`, open a workspace,
+and declare read and write separately:
+
+```go
+workspace, err := files.Open("./workspace") // directory must already exist
 if err != nil {
     return err
 }
-defer runtime.Close()
-return runtime.Run(ctx)
+defer workspace.Close() // after the runtime has stopped
+
+// In your Agent declaration:
+Tools: []wisp.Tool{workspace.ReadFiles(), workspace.WriteFiles()},
 ```
 
-The snippet assumes application-provided capabilities and a cancellation context.
-Only declared sources are started and only declared tools are callable. Model
-configuration stays outside the agent declaration. Markdown instructions are
-loaded in order when the runtime is constructed.
+This is a wiring fragment, not a standalone file. Declare only `ReadFiles()`
+for read-only access. Reads support line ranges; writes require the previous
+content hash before replacing a file. Both support UTF-8 text up to 1 MiB.
 
-Mount `runtime.Handler()` on a local HTTP server for the activity UI. It exposes
-`GET /api/agent`, `/api/runs`, `/api/active-runs`, `/api/runs/{id}`, and `/api/stream`. The handler is
-read-only; a user-message endpoint or reply transport must be supplied as an
-explicit event source or tool. `ListRuns` and `History` also expose inspection in Go.
+See [file-tool documentation](tools/files/README.md) for arguments and examples.
+Workspace scoping is not an OS sandbox, and writes are not crash-atomic.
 
-## Running and deployment
+## Make an event source
 
-Build the included host from the repository root:
+An event source implements:
 
-```sh
-CGO_ENABLED=0 go build -o wisp-minimal ./examples/minimal
-./wisp-minimal -db /absolute/path/to/history.db
+- `Definition()`: one distinct way the agent can wake up.
+- `Run(ctx, emit)`: detect occurrences and emit their facts until canceled.
+
+Save this as `ticks.go`:
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "time"
+
+    wisp "github.com/jacobm-gavin/wisp-agent"
+)
+
+type Ticks struct {
+    Every time.Duration
+}
+
+func (s Ticks) Definition() wisp.EventDefinition {
+    return wisp.EventDefinition{
+        Name:        "timer.tick",
+        Description: fmt.Sprintf("A timer fires every %s.", s.Every),
+    }
+}
+
+func (s Ticks) Run(ctx context.Context, emit wisp.Emit) error {
+    if s.Every <= 0 {
+        return fmt.Errorf("timer interval must be positive")
+    }
+    ticker := time.NewTicker(s.Every)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return ctx.Err()
+        case at := <-ticker.C:
+            data, err := json.Marshal(map[string]time.Time{"fired_at": at.UTC()})
+            if err != nil {
+                return err
+            }
+            if _, err := emit(ctx, wisp.Event{Data: data, Timestamp: at}); err != nil {
+                return err
+            }
+        }
+    }
+}
 ```
 
-Deploy that executable to the same OS/architecture, export `OPENROUTER_API_KEY`,
-and choose an existing writable directory for persistent history. Instructions
-and UI assets are embedded; the target needs neither Go nor a database server.
-A service manager can run the same command and environment. SIGINT/SIGTERM stop
-intake, cancel work, close the HTTP server, and release the database.
+Declare it with `Events: []wisp.EventSource{Ticks{Every: time.Minute}}`.
 
-SQLite history belongs to one runtime. A companion `.lock` file enforces this
-across processes and is released automatically on exit or crash. Leave that file
-in place; use local storage and do not give the same database multiple hard-link
-names. Inspection has no authentication and stays on localhost.
+An event says **what happened**, not what the agent should do. Put behavioral
+policy in Markdown instructions. The model can decide no action is needed.
 
-For your own application, use the minimal host's startup/shutdown code as a
-reference. If you use `os.DirFS(".")` instead of embedded instructions, deploy
-the Markdown files too and set the working directory accordingly.
+A successful `emit` returns the ID of one durably accepted run. It may wait for
+capacity; always handle its error. Repeated emissions create separate runs,
+not deduplicated deliveries. This simple timer is illustrative: Go tickers can
+drop ticks when consumers are slow; it is not a durable scheduler.
 
-## Runtime contract
+Stop background work before `Run` returns. Returning nil ends that source, but
+already accepted runs continue. Returning an unexpected error stops the runtime.
+Do not retain the `emit` callback after the source returns. Events receive no
+automatic reply—communication belongs in a separate tool.
 
-- Successful emission durably creates exactly one event/run pair. Repeated
-  emissions are separate events; external delivery is not deduplicated.
-- Every run starts with runtime instructions, declared Markdown, its event facts,
-  and declared tool definitions. Previous runs are never injected.
-- Tool results retain their call IDs and the call order within each model
-  response. All calls settle before the next turn; a model/tool error fails its run.
-- Final text is saved for inspection. External communication requires a tool.
-- Cancellation stops intake and joins sources and runs. Implementations must honor
-  `context.Context`; tools own argument validation and resource-specific locking.
-- By default, up to 16 runs execute concurrently and each run can make 64 model
-  calls. `Emit` waits for capacity before acceptance; canceled waits create nothing.
-  Configure `MaxConcurrentRuns`, `MaxModelTurns`, and optional `RunTimeout` in
-  `wisp.Config`. The included host sets a five-minute run timeout.
-- One runtime owns each SQLite file. Restart marks unfinished runs failed and
-  never replays them. Instructions and capabilities are fixed until restart.
+## Contributing and development
 
-The core provides concurrency, with no generic workspace isolation, retries,
-automatic memory, or workflow machinery. Inspection exposes raw event/model/tool data.
+Read the [development principles](CONTRIBUTING.md) first. The
+[architecture specification](Wisp_Agent_Architecture.md) is the design authority.
 
-## Development
+Prefer small end-to-end changes over speculative abstractions. New capabilities
+should ordinarily be tools or event sources, without modifying the runtime.
+Keep declarations readable and test the observable execution invariants.
+
+From the repository root:
 
 ```sh
 go test -race ./...
@@ -159,34 +233,170 @@ CGO_ENABLED=0 go build ./...
 go test -run '^$' -fuzz FuzzResponseProtocol -fuzztime=10s ./model/openrouter
 ```
 
-Tests use deterministic models and synthetic capabilities; no credentials or
-inference server are needed. A [runnable example](example_test.go) exercises the
-public API with test doubles (`go test -run ExampleRuntime`). See the [architecture](Wisp_Agent_Architecture.md)
-for design rationale and [core notes](docs/core.md) for implementation decisions
-and acceptance coverage.
+Format changed Go files with `gofmt`. Keep tests next to their packages.
+Normal tests need no API key: they use deterministic models and temporary
+resources. CI runs on Linux and macOS. Paid live checks are
+[opt-in](#live-model-tests).
 
-## OpenRouter
+Useful starting points:
 
-Use `github.com/jacobm-gavin/wisp-agent/model/openrouter` to configure a model:
+- [Public types](agent.go): `Agent`, `EventSource`, `Tool`, and `Model`.
+- [Core notes](docs/core.md): implementation decisions and invariant test map.
+- [Runnable API example](example_test.go): a complete offline execution loop.
+- [File tools](tools/files): real integrations without core changes.
+
+## Assemble your agent
+
+With `clock.go` and `ticks.go` from above, create an `instructions` directory
+and save this as `instructions/base.md`:
+
+```markdown
+You are a small demonstration agent.
+When a timer fires, use current_time once, then summarize the observed time.
+Your final text is saved in execution history; it is not a message to a user.
+```
+
+Save this as `main.go`:
 
 ```go
-model, err := openrouter.New(openrouter.Config{
-    APIKey: os.Getenv("OPENROUTER_API_KEY"),
-    Model:  "qwen/qwen3.8-27b",
-})
+package main
+
+import (
+    "context"
+    "log"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
+
+    wisp "github.com/jacobm-gavin/wisp-agent"
+    "github.com/jacobm-gavin/wisp-agent/model/openrouter"
+)
+
+var Agent = wisp.Agent{
+    Name:         "Clock demo",
+    Model:        "qwen",
+    Instructions: []string{"instructions/base.md"},
+    Events:       []wisp.EventSource{Ticks{Every: time.Minute}},
+    Tools:        []wisp.Tool{CurrentTime{}},
+}
+
+func main() {
+    if err := run(); err != nil {
+        log.Fatal(err)
+    }
+}
+
+func run() error {
+    model, err := openrouter.New(openrouter.Config{
+        APIKey: os.Getenv("OPENROUTER_API_KEY"),
+        Model:  "qwen/qwen3.8-27b",
+    })
+    if err != nil {
+        return err
+    }
+    runtime, err := wisp.New(Agent, wisp.Config{
+        Models:       map[string]wisp.Model{"qwen": model},
+        Instructions: os.DirFS("."),
+        DatabasePath: "wisp.db",
+        RunTimeout:   time.Minute,
+    })
+    if err != nil {
+        return err
+    }
+    defer runtime.Close()
+
+    ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer stop()
+    return runtime.Run(ctx)
+}
 ```
 
-Check `err`, then register `model` in `wisp.Config.Models` under the name used by
-your agent. The adapter supports text and function-tool turns, disables reasoning,
-and makes no automatic retries. Provider errors and token truncation fail the run.
+Export `OPENROUTER_API_KEY`, then run `go run .` from your application directory.
+**This example makes paid model calls once a minute until you stop it.** The first
+event occurs after one minute. Final output is stored in `wisp.db`, not printed.
 
-An opt-in live test checks completion and a persisted Wisp run with synthetic
-tool calls. It sends only test prompts and random fixture values to OpenRouter:
+The model name in `Agent` is a configuration reference; credentials, provider
+settings, and execution limits live outside the declaration. Instructions load
+in declaration order at startup.
+
+This compact example has no HTTP server. For a host with inspection and graceful
+HTTP shutdown, use [examples/minimal/main.go](examples/minimal/main.go) as a
+reference. Mount `runtime.Handler()` on a loopback server. Its read-only routes
+are `/api/agent`, `/api/runs`, `/api/active-runs`, `/api/runs/{id}`, and
+`/api/stream`. `ListRuns`, `ActiveRuns`, and `History` also expose records in Go.
+
+## Running and deployment
+
+Build the included inspection host from the repository root:
 
 ```sh
-WISP_OPENROUTER_LIVE=1 go test -v -count=1 -run TestOpenRouterLive -timeout 4m ./model/openrouter
+CGO_ENABLED=0 go build -o wisp-minimal ./examples/minimal
+./wisp-minimal -db /absolute/path/to/history.db
 ```
 
-Export `OPENROUTER_API_KEY` in the calling shell. Normal tests skip this network
-check. The live test uses the paid model, makes at most five requests with 1,024
-output tokens per request, and depends on provider availability and rate limits.
+Export the API key before starting. Choose an existing writable directory for
+history. The executable targets the build machine's OS/architecture; embedded
+instructions and UI assets mean the target needs neither Go nor a database
+server. The host remains dormant until capabilities are added.
+
+A service manager can run the same command and environment. SIGINT/SIGTERM stop
+intake, cancel work, close HTTP connections, and release the database.
+
+Use local storage and one runtime per SQLite file. Leave its companion `.lock`
+file in place; OS ownership is released on exit or crash. Do not alias a database
+through hard links. Inspection has no authentication and may expose sensitive
+event/model/tool data—keep it on localhost.
+
+For your own application, build its package instead. If instructions use
+`os.DirFS(".")`, deploy the Markdown files and set the working directory;
+alternatively embed them as the minimal host does.
+
+## Runtime guarantees and limits
+
+- Every accepted event creates one run with fresh context: runtime instructions,
+  declared Markdown, event facts, and tool definitions. No implicit prior history.
+- Runs can overlap. Calls within one model turn execute concurrently, and all
+  settle before the next turn. Results retain their original call IDs and order.
+- A response without tool calls completes the run. Final text is saved; only
+  declared tools communicate externally.
+- Model/tool errors fail their run. Cancellation joins sources and runs;
+  implementations must cooperate with `context.Context`.
+- Defaults are 16 concurrent runs and 64 model calls per run. Configure
+  `MaxConcurrentRuns`, `MaxModelTurns`, and optional `RunTimeout` in `wisp.Config`.
+  The included inspection host uses a five-minute timeout.
+- Restart marks unfinished runs failed; it never replays them. Changes to
+  instructions or capabilities require a new runtime.
+
+There is no generic resource isolation, automatic memory, retry machinery,
+planner, workflow engine, or plugin loader.
+
+## Live model tests
+
+The OpenRouter adapter supports text and function tools, disables reasoning, and
+does not automatically retry. Provider errors and token truncation fail the run.
+
+With an exported `OPENROUTER_API_KEY`:
+
+```sh
+WISP_OPENROUTER_LIVE=1 go test -race -v -count=1 -run TestOpenRouterLive -timeout 6m ./model/openrouter
+WISP_OPENROUTER_LIVE=1 go test -race -v -count=1 -run TestOpenRouterLiveFileTools -timeout 2m ./tools/files
+```
+
+Both use paid `qwen/qwen3.8-27b`. The core suite allows at most 21 requests with
+at most 1,024 output tokens each; the file suite allows eight requests with 512
+output tokens each. They use synthetic data and temporary resources. Provider
+availability and rate limits can affect results. Normal tests skip live checks.
+
+## Project status
+
+**Core v0.1 is implemented and acceptance-tested; the API is pre-stable.**
+See the [acceptance record](docs/core-v0.1-acceptance.md).
+
+Included: the runtime, SQLite history, inspection UI/SSE, OpenRouter adapter, and
+explicitly scoped read/write file tools.
+
+Still needed for the full developer-agent prototype: command and reply tools,
+real user-message integration, and a message-submission/reply interface. The
+timer above is an authoring example, not a bundled scheduling service. Core
+acceptance is not a claim of full prototype completion or production readiness.
