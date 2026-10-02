@@ -60,7 +60,7 @@ func New(directory string) (wisp.Tool, error) {
 }
 
 func (t *commandTool) Definition() wisp.ToolDefinition {
-	return wisp.ToolDefinition{Name: "bash", Description: fmt.Sprintf("Run an arbitrary Bash command starting in %q. Commands are unrestricted; this directory is NOT a sandbox. Each call starts a fresh noninteractive shell; cd and variables do not persist. stdin is closed. stdout/stderr are separately capped at 65536 bytes with truncation flags. Nonzero exit fails the tool/run. Use foreground commands, not background services.", t.directory), Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Bash script to execute, including pipelines, redirects, or multiline commands"}},"required":["command"],"additionalProperties":false}`)}
+	return wisp.ToolDefinition{Name: "bash", Description: fmt.Sprintf("Run an arbitrary Bash command starting in %q. Commands are unrestricted; this directory is NOT a sandbox. Each call starts a fresh noninteractive shell; cd and variables do not persist. stdin is closed. stdout/stderr are separately capped at 65536 bytes with truncation flags. Always inspect exit_code: a nonzero exit is returned with output so you can diagnose, correct, and retry using another call. No automatic retries. Use foreground commands, not background services.", t.directory), Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Bash script to execute, including pipelines, redirects, or multiline commands"}},"required":["command"],"additionalProperties":false}`)}
 }
 
 // Result is retained in execution history, including on command failure.
@@ -117,6 +117,13 @@ func (t *commandTool) Execute(ctx context.Context, raw json.RawMessage) (json.Ra
 	}
 	if ctx.Err() != nil {
 		return result, ctx.Err()
+	}
+	// A command reporting failure is a completed observation, not a broken tool.
+	// Let the model inspect the output and choose a recovery in its next turn.
+	// Signals and transport/start failures remain execution errors.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.Exited() {
+		return result, nil
 	}
 	if err != nil {
 		return result, fmt.Errorf("bash command failed: %w", err)

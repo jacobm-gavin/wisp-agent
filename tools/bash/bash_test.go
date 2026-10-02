@@ -65,7 +65,7 @@ func TestCommandsAndWorkingDirectory(t *testing.T) {
 func TestExitFailureAndStdin(t *testing.T) {
 	tool, _ := newTool(t)
 	result, err := execute(t, tool, context.Background(), "printf before; printf failure >&2; exit 7")
-	if err == nil || result.ExitCode != 7 || result.Stdout != "before" || result.Stderr != "failure" {
+	if err != nil || result.ExitCode != 7 || result.Stdout != "before" || result.Stderr != "failure" {
 		t.Fatalf("%+v %v", result, err)
 	}
 	result, err = execute(t, tool, context.Background(), "cat; printf done")
@@ -73,8 +73,17 @@ func TestExitFailureAndStdin(t *testing.T) {
 		t.Fatalf("stdin not EOF: %+v %v", result, err)
 	}
 	result, err = execute(t, tool, context.Background(), "if then")
-	if err == nil || result.ExitCode == 0 || result.Stderr == "" {
+	if err != nil || result.ExitCode == 0 || result.Stderr == "" {
 		t.Fatal("syntax error not reported")
+	}
+}
+
+func TestStartFailureRemainsAnError(t *testing.T) {
+	tool, _ := newTool(t)
+	tool.(*commandTool).executable = filepath.Join(t.TempDir(), "missing-bash")
+	result, err := execute(t, tool, context.Background(), "true")
+	if err == nil || result.ExitCode != -1 {
+		t.Fatalf("%+v %v", result, err)
 	}
 }
 func TestValidation(t *testing.T) {

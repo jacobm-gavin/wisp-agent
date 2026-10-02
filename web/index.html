@@ -3,17 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Wisp · Activity</title>
+  <title>Wisp — Agent workspace</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <header><h1>Wisp</h1><span id="connection" role="status">Connecting…</span></header>
-  <main>
-    <section aria-labelledby="agent-name"><h2 id="agent-name">Agent</h2><p id="model"></p><div id="capabilities"></div></section>
-    <section aria-labelledby="runs-title"><h2 id="runs-title">Active and recent runs</h2><p id="error" role="alert"></p><div id="runs">No runs yet.</div></section>
-    <section aria-labelledby="detail-title"><h2 id="detail-title">Run activity</h2><div id="detail">Select a run to inspect its history.</div></section>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Wisp home"><span class="brand-mark" aria-hidden="true">w</span>Wisp</a>
+    <div class="identity"><span id="agent-name">Agent workspace</span><span id="model"></span></div>
+    <span id="connection" class="connection" role="status">Connecting…</span>
+  </header>
+  <main class="shell">
+    <aside class="history" aria-labelledby="runs-title">
+      <div class="history-heading"><h2 id="runs-title">Run history</h2><span id="run-count" class="count">0</span></div>
+      <p class="muted history-note">One event. One fresh start.</p>
+      <label class="sr-only" for="run-filter">Filter runs</label>
+      <select id="run-filter"><option value="all">All runs</option><option value="running">Running</option><option value="completed">Completed</option><option value="failed">Failed</option></select>
+      <p id="error" class="error" role="alert"></p>
+      <div id="runs"><p class="empty-small">Waiting for the first event.</p></div>
+      <div class="history-footer">History is a record,<br>not the agent’s memory.</div>
+    </aside>
+    <section id="workspace" class="workspace" tabindex="-1" aria-label="Agent workspace">
+      <nav class="workspace-nav" aria-label="Workspace views">
+        <button id="view-chat" class="view-button" data-view="chat" aria-pressed="false" hidden>Temporary chat</button>
+        <button id="view-inspector" class="view-button" data-view="inspector" aria-pressed="true">Run inspector</button>
+        <button id="view-agent" class="view-button" data-view="agent" aria-pressed="false">Capabilities</button>
+      </nav>
+      <section id="chat" class="panel chat-panel" hidden aria-labelledby="chat-title">
+        <div class="panel-heading"><div><h1 id="chat-title">Temporary chat</h1><p>Send a message. Start an independent run.</p></div><span class="badge">Fresh context</span></div>
+        <div class="session-note"><span class="note-dot" aria-hidden="true"></span><span>No conversation memory. Include the context your request needs.</span><details><summary>About this session</summary><p>Replies appear only through the reply tool. This chat is shared by local tabs and clears on server restart. Execution history stays saved.</p></details></div>
+        <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
+        <form id="chat-form" class="composer">
+          <label for="chat-input">Your message</label>
+          <textarea id="chat-input" rows="3" maxlength="8192" required placeholder="What would you like the agent to do?"></textarea>
+          <div class="composer-bottom"><span>⌘ / Ctrl + Enter to send</span><button id="chat-send" class="primary" type="submit">Send message <span aria-hidden="true">↗</span></button></div>
+          <p id="chat-error" class="error" role="alert"></p>
+        </form>
+      </section>
+      <section id="inspector" class="panel inspector-panel" aria-labelledby="detail-title">
+        <div class="panel-heading"><div><h1 id="detail-title">Run inspector</h1><p>From the triggering event to the final result.</p></div></div>
+        <div id="detail" class="detail"><div class="empty-state"><span class="empty-symbol" aria-hidden="true">⌁</span><h2>Every action leaves a trace.</h2><p>Select a run from the history to inspect its model calls, tool results, and saved output.</p></div></div>
+      </section>
+      <section id="agent-panel" class="panel agent-panel" hidden aria-labelledby="capabilities-title">
+        <div class="panel-heading"><div><h1 id="capabilities-title">Declared capabilities</h1><p>What can wake this agent. What it can do.</p></div><span class="badge">From source</span></div>
+        <p class="capability-note">Only capabilities explicitly listed in the agent declaration are available. This view is read-only.</p>
+        <div id="capabilities"></div>
+      </section>
+    </section>
   </main>
-  <footer>Execution history is a record. Each run starts with fresh context.</footer>
 </body>
 </html>

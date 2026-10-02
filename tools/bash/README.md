@@ -30,9 +30,13 @@ is inherited. Default Bash exit semantics apply (no implicit `set -e` or pipefai
 
 The JSON result contains `stdout`, `stderr`, `exit_code`, `stdout_truncated`, and
 `stderr_truncated`. Each output stream retains at most 64 KiB; excess is drained
-and discarded. Invalid UTF-8 is replaced during JSON encoding. Nonzero exit is a
-tool error and fails the run under Wisp's normal semantics; captured output is
-still recorded in history. Start failures use exit code -1. There are no retries.
+and discarded. Invalid UTF-8 is replaced during JSON encoding. A normal nonzero
+exit returns this result to the model, which can inspect diagnostics and choose
+another command to correct or retry. It does not fail the run by itself. This is
+model-directed recovery, not automatic retry machinery. Cancellation, process
+signals, start failures, and execution-infrastructure errors still fail the tool;
+captured output is recorded. Start failures use exit code -1. Runtime turn/deadline
+limits still bound the overall run.
 
 Calls can run concurrently and share filesystem state without locking. Configure
 `wisp.Config.RunTimeout` or another caller deadline to bound command duration.

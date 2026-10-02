@@ -50,6 +50,17 @@ Its default model is the paid `qwen/qwen3.8-27b`.
 
 ### Start your own application
 
+Want to message a model now? Run the [temporary chat demo](examples/chat/README.md):
+
+```sh
+# Export OPENROUTER_API_KEY first. Sends use the paid model.
+go run ./examples/chat -listen 127.0.0.1:18081
+```
+
+Open <http://127.0.0.1:18081>. This declares a message event source and reply tool,
+but no file or Bash access. Each send starts fresh; visible chat is temporary,
+not conversation memory. Execution history stays in SQLite.
+
 In a separate directory:
 
 ```sh
@@ -393,10 +404,11 @@ availability and rate limits can affect results. Normal tests skip live checks.
 **Core v0.1 is implemented and acceptance-tested; the API is pre-stable.**
 See the [acceptance record](docs/core-v0.1-acceptance.md).
 
-Included: the runtime, SQLite history, inspection UI/SSE, OpenRouter adapter, and
-explicitly scoped read/write file tools.
+Included: the runtime, SQLite history, inspection UI/SSE, OpenRouter adapter,
+read/write file tools, an unrestricted Bash tool, and an optional temporary chat
+event-source/reply-tool integration with a runnable example.
 
-Still needed for the full developer-agent prototype: command and reply tools,
-real user-message integration, and a message-submission/reply interface. The
+The components still need a combined developer-agent declaration and end-to-end
+demonstration with file/command/chat capabilities and a second event source. The
 timer above is an authoring example, not a bundled scheduling service. Core
 acceptance is not a claim of full prototype completion or production readiness.

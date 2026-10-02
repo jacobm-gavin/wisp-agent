@@ -3,8 +3,10 @@
 The [architecture specification](../Wisp_Agent_Architecture.md) is authoritative.
 The core implements its runtime with a separate OpenRouter model adapter.
 [Read/write file tools](../tools/files/README.md) are ordinary integrations outside
-the core; command/reply tools and real event sources remain future work. The browser is an inspection surface;
-there is no implicit chat capability.
+the core, as are `tools/bash` and `integrations/webchat`. The runtime HTTP handler
+remains read-only. An application can explicitly mount temporary chat routes and
+declare its message source/reply tool, as `examples/chat` does. The UI shows chat
+only when that integration is mounted; there is no implicit model capability.
 
 ## Architecture conformance review
 
@@ -81,6 +83,9 @@ function tools. It does not add retries or inject any previous run context.
   arguments against their declared JSON schemas; typed schema generation is deferred.
 - A failing tool does not abandon sibling calls. The runtime waits for the entire
   batch, records its results, then fails the run. It does not retry external effects.
+  Bash's ordinary nonzero command exits are structured observations, not Go tool
+  errors: the model receives the exit code/output and can choose to recover in a
+  later turn. Cancellation and execution-infrastructure failures remain errors.
 - Model/tool panics become run failures. Source failures stop the runtime and are
   returned to the caller. Failure to persist a terminal state also stops the runtime;
   interrupted work remains detectable on reopening.
@@ -127,8 +132,9 @@ Starting the application configures OpenRouter but makes no inference request.
 | Live concurrent runs/tools, explicit replies, failures, cancellation, HTTP/SSE, and disk reopen | `TestOpenRouterLiveCoreE2E` |
 
 The full prototype's integrations remain outside the core milestone. Read/write
-tools now live in `tools/files`; command/reply tools and user/timer integrations
-remain future work. `TestOpenRouterLive` is an opt-in network check for
+tools live in `tools/files`, Bash in `tools/bash`, and temporary messaging in
+`integrations/webchat`. A combined developer-agent demonstration remains future
+work. `TestOpenRouterLive` is an opt-in network check for
 `qwen/qwen3.8-27b`; it verifies text completion and an entire persisted run
 using two synthetic tool results. `TestOpenRouterLiveCoreE2E` exercises six events
 with real model calls, synthetic capabilities, a file-backed database, and a real

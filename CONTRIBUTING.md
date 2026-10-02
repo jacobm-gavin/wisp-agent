@@ -47,9 +47,10 @@ The opt-in paid live suite and its bounds are documented in the
 
 The current milestone is the framework core, not the full developer-agent
 prototype in sections 20 and 27. Read/write file Tools now live outside the core
-in `tools/files`. Command/reply Tools, user/timer sources, and a message-submission
-interface remain deferred. Synthetic fixtures prove runtime behavior, not those
-remaining integrations.
+in `tools/files`; Bash lives in `tools/bash`, and temporary web messaging/replies
+in `integrations/webchat`. A combined developer-agent demonstration and a second
+real event source remain to be exercised together. Synthetic fixtures alone do
+not prove those integrations.
 Typed Tool/schema helpers are an ergonomic direction, not a frozen requirement;
 let real implementations establish the need before expanding the API.
 
