@@ -253,6 +253,8 @@ Useful starting points:
 
 - [Public types](agent.go): `Agent`, `EventSource`, `Tool`, and `Model`.
 - [Core notes](docs/core.md): implementation decisions and invariant test map.
+- [OpenAI-compatible provider notes](docs/openai-compatible-provider-notes.md):
+  background and implementation guidance for issue #1.
 - [Runnable API example](example_test.go): a complete offline execution loop.
 - [File tools](tools/files): real integrations without core changes.
 
