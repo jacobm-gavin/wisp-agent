@@ -48,6 +48,39 @@ act.
 The host accepts `-db PATH`, `-listen 127.0.0.1:PORT`, and `-model MODEL_ID`.
 Its default model is the paid `qwen/qwen3.8-27b`.
 
+### Use OpenAI or a compatible Chat Completions server
+
+`model/openaicompat` implements Wisp's ordinary `Model` interface using the
+non-streaming Chat Completions protocol. Configure it outside `agent.go`, then
+give the resulting instance a label used by the agent declaration:
+
+```go
+import "github.com/jacobm-gavin/wisp-agent/model/openaicompat"
+
+model, err := openaicompat.New(openaicompat.Config{
+    APIKey: os.Getenv("OPENAI_API_KEY"), // optional for local servers
+    Model:  "gpt-4.1-mini",
+}) // BaseURL defaults to https://api.openai.com/v1
+
+runtime, err := wisp.New(Agent, wisp.Config{
+    Models: map[string]wisp.Model{"openai": model},
+    // ...instructions and database path...
+})
+```
+
+For a local vLLM-compatible server, set its API base and model ID explicitly:
+
+```go
+model, err := openaicompat.New(openaicompat.Config{
+    BaseURL: "http://127.0.0.1:8000/v1",
+    Model:   "your-served-model",
+})
+```
+
+Tool calling on vLLM depends on the server and model configuration. Wisp sends
+standard function-tool definitions and surfaces endpoint or model errors; it
+does not enable provider-specific tool behavior automatically.
+
 ### Start your own application
 
 Want to message a model now? Run the [temporary chat demo](examples/chat/README.md):
